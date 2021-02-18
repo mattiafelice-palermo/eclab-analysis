@@ -4,6 +4,11 @@ EClab-analysis is a Python library to read Biologic EClab mpt files.
 ## Installation
 Download the EClab.py file and save it to your PYTHONPATH.
 
+## Dependencies
+* SciPy 1.6.0 or higher
+* Pandas
+* numpy
+
 ## Usage
 
 ```python
