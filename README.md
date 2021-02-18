@@ -1,10 +1,10 @@
 # eclab-analysis
 EClab-analysis is a Python library to read Biologic EClab mpt files.
 
-##Installation
+## Installation
 Download the EClab.py file and save it to your PYTHONPATH.
 
-##Usage
+## Usage
 
 ```python
 from EClab import CellCycling
