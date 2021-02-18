@@ -24,6 +24,8 @@ Each cycle object contains the raw data from the MPT file, returned as a numpy
 array:
 
 ```python
+first_cycle = readings[0] # select first cycle
+
 first_cycle['time/s'] # returns the timesteps of each reading during the cycle
 first_cycle['(Q-Qo)/mA.h'] # returns the current of each reading
 first_cycle['Ewe/V'] # returns the voltage of each reading
