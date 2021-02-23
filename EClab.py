@@ -8,13 +8,11 @@ Created on Mon Feb  1 11:18:43 2021
 import pandas as pd
 import numpy as np
 from scipy import integrate
-import os
-import sys
 
 #%% Class for ECLab charge-discharge analysis
 
 
-class CellCycling:
+class GroupedCycles:
     """A class to read Biologic ECLab cell charge/discharge mpt files and
     compute relevant properties.
     
@@ -40,7 +38,7 @@ class CellCycling:
         
     """
 
-    def __init__(self, folder, filename):
+    def __init__(self, cycles):
         """       
 
         Parameters
@@ -55,62 +53,20 @@ class CellCycling:
         None.
 
         """
-        self._data = None  # dataframe with readings
-        self._cycles = []  # list of Cycle objects
+        self._cycles = cycles  # list of Cycle objects
         self.columns = None # list of dataframe columns
         self.ncycles = None  # total number of cycles
         self.cretention = None  # list of capacity retentions for each cycle
         self.capacities = None  # list of capacities for each cycle
         self.cyclelist = None  # progressive index from 1 t ncycles for user
-        self.efficiencies = {}  # dict of efficiencies for each cycle
+        self.efficiencies = {}  # dict of efficiencies for each cycle          
+        
+        self.ncycles = len(self._cycles)
 
-        self.__read_mpt_file(folder, filename)  # read input file
-        #self.__populate_cycles()  # create and add Cycle objects to _cycles[]
+        self._remove_incomplete()
         self.__compute_cretention()  # compute cretention for each cycle
         self.__get_efficiencies()  # compute efficiency for each cycle
-
-    def __read_mpt_file(self, folder, filename):
-        path = os.path.join(folder, filename)
-
-        with open(path, "r", encoding="utf8", errors="ignore") as f:
-            
-            delims=[] # contains cycle number, first and last line number
-            beginning = None
-            
-            for line_num, line in enumerate(f):
-                if "Number of loops : " in line:
-                    self.ncycles = int(line.split(" ")[-1])
-                
-                
-                # Before the output of the experiment, EClab lists the starting
-                # and ending line of each loop. These will be used to slice
-                # the pandas dataframe into the different cycles.
-                if "Loop " in line:
-                    loop_num = int(line.split(" ")[1])
-                    first_pos = int(line.split(" ")[-3])
-                    second_pos = int(line.split(" ")[-1])
-                    delims.append([loop_num, first_pos, second_pos])
-                    
-                if "mode\t" in line:
-                    beginning = line_num
-                    break
-            
-            self._data = pd.read_table(
-                    path, dtype=np.float64, delimiter = '\t', skiprows=beginning, decimal=","
-            )
-            
-            self.columns = list(self._data.columns)
-            self.cyclelist = np.arange(0, self.ncycles)
-            
-            cycle_num = 0
-            
-            # initiate Cycle object providing dataframe view within delims
-            while cycle_num < self.ncycles:
-                first_row = delims[cycle_num][1]
-                last_row = delims[cycle_num][2]
-                cycle = Cycle(cycle_num, self._data[first_row:last_row])
-                self._cycles.append(cycle)
-                cycle_num +=1
+        
 
     def __getitem__(self, cycle):
         return self._cycles[cycle]
@@ -118,6 +74,13 @@ class CellCycling:
     def __iter__(self):
         for obj in self._cycles:
             yield obj
+
+    def _remove_incomplete(self):
+        for cycle in self._cycles:
+            if cycle.capacity_discharge == None:
+                self._cycles.remove(cycle)
+            elif cycle.capacity_charge == None:
+                self._cycles.remove(cycle)
 
     def __compute_cretention(self, reference=1):
         # Retention is defined as the ration between the discharge for cycle=n
@@ -138,28 +101,75 @@ class CellCycling:
         for L in ['C', 'V', 'E']:
             efficiency = [cycle.efficiencies[L] for cycle in self._cycles]
             self.efficiencies[L] = np.array(efficiency)
-
-    def filter_row(self, column, value):
-        """        
-        
-        Search for rows in dataframe that contain value in column
-        and return the filtered dataframe.
-        
-        Parameters
-        ----------
-        column : str
-            column of the dataframe that will be used for filtering
-        value : float or int
             
+    def remove_unphysical_efficiency(self):
+        for cycle in self._cycles:
+            if cycle.efficiencies['E'] > 100:
+                self._cycles.remove(cycle)
+        self.__get_efficiencies()
 
-        Returns
-        -------
-        Pandas Dataframe
-            Pandas Dataframe containing the filtered rows.
 
-        """
-        return self._data[self._data[column] == value]
-
+class CellCycling(GroupedCycles):
+    def __init__(self, *argv):
+        
+        self._filenames = argv
+        self._columnscheck = None
+        
+        all_cycles = []
+        for filename in argv:
+            all_cycles.extend(self.__read_single_mpt(filename))
+            
+        super().__init__(all_cycles)
+        
+    def __read_single_mpt(self, file):
+        with open(file, "r", encoding="utf8", errors="ignore") as f:
+            
+            delims=[] # contains cycle number, first and last line number
+            beginning = None
+            
+            
+            ncycles = None
+            for line_num, line in enumerate(f):
+                if "Number of loops : " in line:
+                    ncycles = int(line.split(" ")[-1])
+                
+                
+                # Before the output of the experiment, EClab lists the starting
+                # and ending line of each loop. These will be used to slice
+                # the pandas dataframe into the different cycles.
+                if "Loop " in line:
+                    loop_num = int(line.split(" ")[1])
+                    first_pos = int(line.split(" ")[-3])
+                    second_pos = int(line.split(" ")[-1])
+                    delims.append([loop_num, first_pos, second_pos])
+                    
+                if "mode\t" in line:
+                    beginning = line_num
+                    break
+            
+            data = pd.read_table(file, dtype=np.float64, delimiter = '\t', skiprows=beginning, decimal=",")
+            
+            #columns = list(data.columns)
+            #if self._columnscheck is None:
+            #    self.columns = columns
+            #elif Counter(columns) != Counter(self.columns):
+            #    list_as_set = set(columns)
+            #    self.columns = list(list_as_set.intersection(self.columns))
+                #warnings.warn("The files have different columns. Using only common columns")
+            
+            cycle_num = 0
+            
+            
+            cycles = []
+            # initiate Cycle object providing dataframe view within delims
+            while cycle_num < ncycles:
+                first_row = delims[cycle_num][1]
+                last_row = delims[cycle_num][2]
+                cycle = Cycle(cycle_num, file, data[first_row:last_row].copy())
+                cycles.append(cycle)
+                cycle_num +=1
+            
+            return cycles
 
 class Cycle:
     """
@@ -192,7 +202,7 @@ class Cycle:
     of the cell cycle. 
     """
 
-    def __init__(self, cycle, data):
+    def __init__(self, cycle, file, data):
         self._cyclen = cycle  # cycle number
         self._data = data  # view of CellCycling self._data pandas dataframe
         self.energy_charge = None
@@ -200,6 +210,7 @@ class Cycle:
         self.capacity_charge = None
         self.capacity_discharge = None
         self.efficiencies = {}
+        self.filename = file
 
         self.__compute_efficiencies()
 
@@ -222,8 +233,11 @@ class Cycle:
 
     def __compute_capacity(self):
         # Gets the last Capacity reading for the cycle discharge
-        self.capacity_discharge = self.filter_row("ox/red", 0)["Capacity/mA.h"].iloc[-1]
-        self.capacity_charge = self.filter_row("ox/red", 1)["Capacity/mA.h"].iloc[-1]
+        try:
+            self.capacity_discharge = self.filter_row("ox/red", 0)["Capacity/mA.h"].iloc[-1]
+            self.capacity_charge = self.filter_row("ox/red", 1)["Capacity/mA.h"].iloc[-1]
+        except:
+            return False
         
     def __compute_energy(self):
         energy = []
@@ -242,8 +256,11 @@ class Cycle:
         # reading and simplifies in the ratio, efficienciy is computed as the
         # ratio between sum of voltages at discharge and charge.
         
-        self.__compute_energy()
-        self.__compute_capacity()
+        # check if cycle has done both charge and discharge, otherwise exit
+        if self.__compute_capacity() is False:
+            return
+            
+        self.__compute_energy()       
         
         coulomb_eff = self.capacity_discharge/self.capacity_charge
         energy_eff = self.energy_discharge/self.energy_charge
