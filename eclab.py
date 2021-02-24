@@ -13,8 +13,7 @@ from scipy import integrate
 
 
 class GroupedCycles:
-    """A class to read Biologic ECLab cell charge/discharge mpt files and
-    compute relevant properties.
+    """Class to analyze Biologic EClab output.
 
     ...
 
@@ -43,10 +42,8 @@ class GroupedCycles:
 
         Parameters
         ----------
-        folder : str
-            folder where the mpt file is contained
-        filename : str
-            name of the file to be read, including the mpt extension
+        cycles : Cycle object
+            list of Cycle objects
 
         Returns
         -------
@@ -61,9 +58,9 @@ class GroupedCycles:
         self.cyclelist = None  # progressive index from 1 t ncycles for user
         self.efficiencies = {}  # dict of efficiencies for each cycle
 
-        self.ncycles = len(self._cycles)
+        self.ncycles = len(self._cycles) # number of cycles
 
-        self._remove_incomplete()
+        self._remove_halfcycles() # delete cycles w/o (dis)charge capacity
         self.__compute_cretention()  # compute cretention for each cycle
         self.__get_efficiencies()  # compute efficiency for each cycle
 
@@ -74,18 +71,26 @@ class GroupedCycles:
         for obj in self._cycles:
             yield obj
 
-    def _remove_incomplete(self):
+    def _remove_halfcycles(self):
         for cycle in self._cycles:
-            if cycle.capacity_discharge == None:
+            # charge or discharge values will be set to none if one of the two
+            # is missing. It is enough to check for one
+           
+            if cycle.capacity_discharge is None:
                 self._cycles.remove(cycle)
-            elif cycle.capacity_charge == None:
-                self._cycles.remove(cycle)
+                #print("Removing cycle "+str(cycle._cyclen)+" missing (dis)charge")
+
+        self.ncycles = len(self._cycles)
 
     def __compute_cretention(self, reference=1):
         # Retention is defined as the ration between the discharge for cycle=n
         # and cycle=1
         # The function also appends the cell capacities to the CellCycling obj
-        initial_capacity = self._cycles[reference].capacity_discharge
+        try:
+            initial_capacity = self._cycles[reference].capacity_discharge
+        except:
+            raise IndexError("Full cycles in MPT file: "+ str(self.ncycles)+". Cannot compute capacity retention.")
+            
         cretention = []
         capacities = []
         for cycle in self._cycles:
@@ -101,24 +106,48 @@ class GroupedCycles:
             efficiency = [cycle.efficiencies[label] for cycle in self._cycles]
             self.efficiencies[label] = np.array(efficiency)
 
-    def remove_unphysical_efficiency(self):
+    def remove_incomplete_cycles(self):        
+        # In case of partial charging followed by complete discharge, more
+        # energy will be output than what was input. Therefore efficiency will
+        # be higher than 100%. Remove these cycles and their corresponding
+        # computed properties.
         for cycle in self._cycles:
             if cycle.efficiencies["E"] > 100:
                 self._cycles.remove(cycle)
+                #print("Removing cycle "+str(cycle._cyclen)+" due to eff > 100")
         self.__get_efficiencies()
+        self.__compute_cretention()
+        self.ncycles = len(self._cycles)
 
 
 class CellCycling(GroupedCycles):
+    '''
+    Read multiple MPT files from Biologic EClab BCD routine.
+    '''
+    
     def __init__(self, *argv):
+        '''
+        
 
+        Parameters
+        ----------
+        *argv : str
+            List of filenames.
+
+        Returns
+        -------
+        None.
+
+        '''
         self._filenames = argv
-        self._columnscheck = None
+        self._columnscheck = []
 
         all_cycles = []
         for filename in argv:
             all_cycles.extend(self.__read_single_mpt(filename))
 
         super().__init__(all_cycles)
+        self.columns = self._columns_check()
 
     def __read_single_mpt(self, file):
         with open(file, "r", encoding="utf8", errors="ignore") as f:
@@ -148,26 +177,25 @@ class CellCycling(GroupedCycles):
                 file, dtype=np.float64, delimiter="\t", skiprows=beginning, decimal=","
             )
 
-            # columns = list(data.columns)
-            # if self._columnscheck is None:
-            #    self.columns = columns
-            # elif Counter(columns) != Counter(self.columns):
-            #    list_as_set = set(columns)
-            #    self.columns = list(list_as_set.intersection(self.columns))
-            # warnings.warn("The files have different columns. Using only common columns")
+            self._columnscheck.append(list(data.columns))
 
             cycle_num = 0
 
             cycles = []
+
             # initiate Cycle object providing dataframe view within delims
             while cycle_num < ncycles:
                 first_row = delims[cycle_num][1]
                 last_row = delims[cycle_num][2]
-                cycle = Cycle(cycle_num, file, data[first_row:last_row].copy())
+                cycle = Cycle(cycle_num, file, data[first_row:last_row+1].copy())
                 cycles.append(cycle)
                 cycle_num += 1
 
             return cycles
+
+    def _columns_check(self):
+        columns = set.intersection(*[set(x) for x in self._columnscheck])
+        return list(columns)
 
 
 class Cycle:
@@ -260,6 +288,7 @@ class Cycle:
         # ratio between sum of voltages at discharge and charge.
 
         # check if cycle has done both charge and discharge, otherwise exit
+        # without capacity we cannot compute coulombic efficiency
         if self.__compute_capacity() is False:
             return
 
